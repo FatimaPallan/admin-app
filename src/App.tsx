@@ -1,24 +1,69 @@
 import { useEffect, useRef, useState } from 'react';
-import { createProduct, deleteProduct, fetchAllProducts, uploadImage, type ApiProduct } from './api';
+import {
+  createProduct,
+  updateProduct,
+  deleteProduct,
+  fetchAllProducts,
+  uploadImage,
+  type ApiProduct,
+} from './api';
 
 const ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || 'admin123';
+
+const ACCESSORIES_SUBCATEGORIES = [
+  'Chain bracelet',
+  'Necklaces',
+  'Finger rings',
+  'Kada Bracelet',
+  'Thin wrist kada',
+  'Hoops/Earrings',
+  'Insta viral pinteresty products',
+  'Mens Jewellery',
+  'Korean earrings',
+  'Combos',
+  'Anklets',
+  'Hair accessories',
+  'Gifting',
+  'Add ons',
+];
+
+const GIFTS_SUBCATEGORIES = [
+  'Bouquet',
+  'Premium hampers',
+  'Budget Friendly hampers',
+  'Accessories hampers',
+  'Gifting options',
+  'Gifts for her',
+  'Gifts for him',
+  'Wedding favour',
+  'Baby shower favour',
+  'Return gifts',
+];
 
 type FormState = {
   title: string;
   description: string;
   price: string;
+  originalPrice: string;
+  offerPrice: string;
   category: 'accessories' | 'gifts';
+  subcategory: string;
   badge: string;
   imageUrl: string;
+  availableQuantity: string;
 };
 
 const initialForm: FormState = {
   title: '',
   description: '',
   price: '',
+  originalPrice: '',
+  offerPrice: '',
   category: 'accessories',
+  subcategory: '',
   badge: '',
   imageUrl: '',
+  availableQuantity: '',
 };
 
 export default function App() {
@@ -36,6 +81,7 @@ export default function App() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [editingProduct, setEditingProduct] = useState<ApiProduct | null>(null);
 
   const load = async () => {
     setError(null);
@@ -93,12 +139,47 @@ export default function App() {
       }
 
       // Create product with image URL (either from upload or manual input)
-      if (!imageUrl) {
+      // When editing, allow keeping existing image if no new image is provided
+      if (!imageUrl && !editingProduct) {
         throw new Error('Please provide an image (upload file or enter URL)');
       }
+      // If editing and no new image provided, use existing image
+      if (editingProduct && !imageUrl && !imageFile) {
+        imageUrl = editingProduct.imageUrl || editingProduct.image || '';
+      }
 
-      await createProduct({ ...form, imageUrl });
+      const productData: any = {
+        ...form,
+        imageUrl,
+      };
+
+      // Only include availableQuantity for accessories
+      if (form.category === 'accessories' && form.availableQuantity) {
+        productData.availableQuantity = parseInt(form.availableQuantity, 10);
+      } else {
+        delete productData.availableQuantity;
+      }
+
+      // Clean up empty strings
+      if (!productData.originalPrice) delete productData.originalPrice;
+      if (!productData.offerPrice) delete productData.offerPrice;
+      if (!productData.subcategory) delete productData.subcategory;
+      if (!productData.badge) delete productData.badge;
+      // Keep legacy price field for backward compatibility, but prefer originalPrice/offerPrice
+      if (!productData.price && productData.originalPrice) {
+        productData.price = productData.originalPrice;
+      }
+
+      if (editingProduct) {
+        // Update existing product
+        await updateProduct(editingProduct.id, form.category, productData);
+      } else {
+        // Create new product
+        await createProduct(productData);
+      }
+
       setForm(initialForm);
+      setEditingProduct(null);
       setImageFile(null);
       // Reset file input
       if (fileInputRef.current) {
@@ -112,11 +193,46 @@ export default function App() {
     }
   };
 
+  const handleEdit = (product: ApiProduct) => {
+    setEditingProduct(product);
+    setForm({
+      title: product.title || '',
+      description: product.description || '',
+      price: product.price || '',
+      originalPrice: product.originalPrice || '',
+      offerPrice: product.offerPrice || '',
+      category: (product.category as 'accessories' | 'gifts') || 'accessories',
+      subcategory: product.subcategory || '',
+      badge: product.badge || '',
+      imageUrl: product.imageUrl || product.image || '',
+      availableQuantity:
+        product.availableQuantity !== undefined ? String(product.availableQuantity) : '',
+    });
+    setImageFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    // Scroll to form
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleCancelEdit = () => {
+    setEditingProduct(null);
+    setForm(initialForm);
+    setImageFile(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
   const handleDelete = async (id: string, category?: 'accessories' | 'gifts') => {
     setLoading(true);
     setError(null);
     try {
       await deleteProduct(id, category);
+      if (editingProduct?.id === id) {
+        handleCancelEdit();
+      }
       await load();
     } catch (err) {
       setError('Failed to delete product.');
@@ -172,7 +288,19 @@ export default function App() {
       <main className="max-w-6xl mx-auto px-5 py-6 space-y-6">
         <section className="bg-white rounded-xl p-5 shadow-sm border border-gray-200">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-lg font-semibold">Add Product</h2>
+            <div className="flex items-center gap-3">
+              <h2 className="text-lg font-semibold">
+                {editingProduct ? 'Edit Product' : 'Add Product'}
+              </h2>
+              {editingProduct && (
+                <button
+                  onClick={handleCancelEdit}
+                  className="text-xs text-gray-600 hover:text-gray-800 px-2 py-1 border border-gray-300 rounded"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
             {error && <div className="text-sm text-red-600">{error}</div>}
           </div>
           <form className="grid gap-3 md:grid-cols-2" onSubmit={handleSubmit}>
@@ -187,13 +315,25 @@ export default function App() {
               />
             </label>
             <label className="flex flex-col gap-1 text-sm font-semibold">
-              Price (₹)
+              Original Price (₹)
               <input
-                name="price"
-                value={form.price}
+                name="originalPrice"
+                value={form.originalPrice}
                 onChange={handleChange}
                 className="border rounded-md px-3 py-2 text-sm"
                 inputMode="decimal"
+                placeholder="Enter original price"
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm font-semibold">
+              Discount/Sale Price (₹) - Optional
+              <input
+                name="offerPrice"
+                value={form.offerPrice}
+                onChange={handleChange}
+                className="border rounded-md px-3 py-2 text-sm"
+                inputMode="decimal"
+                placeholder="Enter discount price (leave empty if no discount)"
               />
             </label>
             <label className="flex flex-col gap-1 text-sm font-semibold md:col-span-2">
@@ -211,11 +351,32 @@ export default function App() {
               <select
                 name="category"
                 value={form.category}
-                onChange={handleChange}
+                onChange={(e) => {
+                  handleChange(e);
+                  setForm((prev) => ({ ...prev, subcategory: '' }));
+                }}
                 className="border rounded-md px-3 py-2 text-sm"
               >
                 <option value="accessories">Accessories</option>
                 <option value="gifts">Gifts & Crafts</option>
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-sm font-semibold">
+              Subcategory
+              <select
+                name="subcategory"
+                value={form.subcategory}
+                onChange={handleChange}
+                className="border rounded-md px-3 py-2 text-sm"
+              >
+                <option value="">Select subcategory</option>
+                {(form.category === 'accessories' ? ACCESSORIES_SUBCATEGORIES : GIFTS_SUBCATEGORIES).map(
+                  (sub) => (
+                    <option key={sub} value={sub}>
+                      {sub}
+                    </option>
+                  ),
+                )}
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm font-semibold">
@@ -228,6 +389,20 @@ export default function App() {
                 placeholder="Featured / New / Premium"
               />
             </label>
+            {form.category === 'accessories' && (
+              <label className="flex flex-col gap-1 text-sm font-semibold">
+                Available Quantity (for accessories only)
+                <input
+                  name="availableQuantity"
+                  value={form.availableQuantity}
+                  onChange={handleChange}
+                  className="border rounded-md px-3 py-2 text-sm"
+                  type="number"
+                  min="0"
+                  placeholder="Leave empty if unlimited"
+                />
+              </label>
+            )}
             <label className="flex flex-col gap-1 text-sm font-semibold md:col-span-2">
               Image (Upload to Cloudinary or paste URL)
               <div className="flex gap-2">
@@ -268,7 +443,13 @@ export default function App() {
                 disabled={loading || uploadingImage}
                 className="inline-flex items-center px-4 py-2 rounded-md bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700 disabled:opacity-60"
               >
-                {uploadingImage ? 'Uploading image...' : loading ? 'Saving...' : 'Add Product'}
+                {uploadingImage
+                  ? 'Uploading image...'
+                  : loading
+                    ? 'Saving...'
+                    : editingProduct
+                      ? 'Update Product'
+                      : 'Add Product'}
               </button>
             </div>
           </form>
@@ -279,8 +460,16 @@ export default function App() {
             title="Accessories"
             items={products.accessories}
             onDelete={handleDelete}
+            onEdit={handleEdit}
+            editingProductId={editingProduct?.id}
           />
-          <ProductList title="Gifts & Crafts" items={products.gifts} onDelete={handleDelete} />
+          <ProductList
+            title="Gifts & Crafts"
+            items={products.gifts}
+            onDelete={handleDelete}
+            onEdit={handleEdit}
+            editingProductId={editingProduct?.id}
+          />
         </section>
       </main>
     </div>
@@ -291,10 +480,14 @@ function ProductList({
   title,
   items,
   onDelete,
+  onEdit,
+  editingProductId,
 }: {
   title: string;
   items: ApiProduct[];
   onDelete: (id: string, category?: 'accessories' | 'gifts') => void;
+  onEdit: (product: ApiProduct) => void;
+  editingProductId?: string;
 }) {
   return (
     <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
@@ -326,20 +519,64 @@ function ProductList({
             )}
             <div className="flex-1 min-w-0">
               <div className="text-sm font-semibold text-neutral-900">{p.title}</div>
+              {p.subcategory && (
+                <div className="text-xs text-gray-400 mt-0.5">{p.subcategory}</div>
+              )}
               <div className="text-xs text-gray-500 truncate">{p.description}</div>
-              <div className="text-sm font-semibold text-amber-700">₹{p.price}</div>
-              {p.badge ? (
-                <span className="inline-flex mt-1 px-2 py-0.5 text-[11px] font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-100">
-                  {p.badge}
-                </span>
-              ) : null}
+              <div className="flex items-center gap-2 mt-1">
+                {p.offerPrice ? (
+                  <>
+                    <div className="text-sm font-semibold text-amber-700">₹{p.offerPrice}</div>
+                    {p.originalPrice && (
+                      <div className="text-xs text-gray-400 line-through">₹{p.originalPrice}</div>
+                    )}
+                  </>
+                ) : p.originalPrice ? (
+                  <div className="text-sm font-semibold text-amber-700">₹{p.originalPrice}</div>
+                ) : (
+                  <div className="text-sm font-semibold text-amber-700">₹{p.price || 'N/A'}</div>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1 mt-1">
+                {p.badge && (
+                  <span className="inline-flex px-2 py-0.5 text-[11px] font-semibold rounded-full bg-amber-50 text-amber-700 border border-amber-100">
+                    {p.badge}
+                  </span>
+                )}
+                {p.category === 'accessories' && p.availableQuantity !== undefined && (
+                  <span
+                    className={`inline-flex px-2 py-0.5 text-[11px] font-semibold rounded-full ${
+                      p.availableQuantity === 0
+                        ? 'bg-red-50 text-red-700 border border-red-100'
+                        : p.availableQuantity <= 3
+                          ? 'bg-orange-50 text-orange-700 border border-orange-100'
+                          : ''
+                    }`}
+                  >
+                    {p.availableQuantity === 0
+                      ? 'Sold Out'
+                      : p.availableQuantity <= 3
+                        ? `Only ${p.availableQuantity} left`
+                        : `${p.availableQuantity} available`}
+                  </span>
+                )}
+              </div>
             </div>
-            <button
-              onClick={() => onDelete(p.id, p.category as 'accessories' | 'gifts')}
-              className="flex-shrink-0 text-xs font-semibold text-red-600 hover:text-red-700 px-2 py-1"
-            >
-              Delete
-            </button>
+            <div className="flex-shrink-0 flex flex-col gap-1">
+              <button
+                onClick={() => onEdit(p)}
+                className="text-xs font-semibold text-blue-600 hover:text-blue-700 px-2 py-1 border border-blue-200 rounded"
+                disabled={editingProductId === p.id}
+              >
+                {editingProductId === p.id ? 'Editing...' : 'Edit'}
+              </button>
+              <button
+                onClick={() => onDelete(p.id, p.category as 'accessories' | 'gifts')}
+                className="text-xs font-semibold text-red-600 hover:text-red-700 px-2 py-1"
+              >
+                Delete
+              </button>
+            </div>
           </div>
         ))}
         {!items.length && <div className="text-sm text-gray-500">No products.</div>}
